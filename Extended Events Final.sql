@@ -11,6 +11,8 @@ IF EXISTS (SELECT * FROM  sys.configurations WHERE name = 'blocked process thres
 
 IF (SELECT TOP 1 1 FROM  sys.server_event_sessions WHERE name = 'SQLMonitoring_CompletedQueries')			IS NOT NULL DROP EVENT SESSION SQLMonitoring_CompletedQueries		  ON SERVER;
 IF (SELECT TOP 1 1 FROM  sys.server_event_sessions WHERE name = 'SQLMonitoring_PageSplits')					IS NOT NULL DROP EVENT SESSION SQLMonitoring_PageSplits				  ON SERVER;
+IF (SELECT TOP 1 1 FROM  sys.server_event_sessions WHERE name = 'Histogram_PageSplits')						IS NOT NULL DROP EVENT SESSION Histogram_PageSplits					  ON SERVER;
+
 IF (SELECT TOP 1 1 FROM  sys.server_event_sessions WHERE name = 'SQLMonitoring_CorruptionAndConsistency')	IS NOT NULL DROP EVENT SESSION SQLMonitoring_CorruptionAndConsistency ON SERVER;
 IF (SELECT TOP 1 1 FROM  sys.server_event_sessions WHERE name = 'SQLMonitoring_ObjectModifications')		IS NOT NULL DROP EVENT SESSION SQLMonitoring_ObjectModifications      ON SERVER;
 IF (SELECT TOP 1 1 FROM  sys.server_event_sessions WHERE name = 'SQLMonitoring_DatabaseLevelEvents')		IS NOT NULL DROP EVENT SESSION SQLMonitoring_DatabaseLevelEvents      ON SERVER;
@@ -73,7 +75,10 @@ ADD EVENT sqlserver.sort_warning(
     WHERE (([used_memory_kb]>=(1000) OR [granted_memory_kb]>=(10000)) AND [worktable_physical_reads]>=(100) AND [sqlserver].[is_system]=(0))),
 ADD EVENT sqlserver.sql_statement_completed(
     ACTION(sqlos.task_time,sqlserver.database_name,package0.collect_system_time,sqlserver.client_app_name,sqlserver.client_hostname,sqlserver.plan_handle,sqlserver.query_hash,sqlserver.session_id)
-    WHERE ([duration]>=(1000000) OR [cpu_time]>=(1000000))),
+    WHERE ([duration]>=(1000000) OR [cpu_time]>=(1000000))),	
+ADD EVENT sqlserver.sql_batch_completed(SET collect_batch_text=(1)
+    ACTION(package0.collect_system_time,sqlserver.client_app_name,sqlserver.client_hostname,sqlserver.database_name,sqlserver.plan_handle,sqlserver.query_hash,sqlserver.session_id,sqlserver.username)
+    WHERE (([duration]>=(1000000)) OR ([cpu_time]>=(1000000)))),
 ADD EVENT sqlserver.unmatched_filtered_indexes(
     ACTION(package0.collect_system_time,sqlos.task_time,sqlserver.client_app_name,sqlserver.client_hostname,sqlserver.plan_handle,sqlserver.query_hash,sqlserver.session_id,sqlserver.sql_text,sqlserver.username))
 ADD TARGET package0.ring_buffer(SET max_events_limit=(5000),max_memory=(10240))
@@ -89,8 +94,9 @@ GO
 --ADD TARGET package0.ring_buffer(SET max_memory=(25600))
 --WITH (MAX_MEMORY=4096 KB,EVENT_RETENTION_MODE=ALLOW_SINGLE_EVENT_LOSS,MAX_DISPATCH_LATENCY=30 SECONDS,MAX_EVENT_SIZE=0 KB,MEMORY_PARTITION_MODE=NONE,TRACK_CAUSALITY=ON,STARTUP_STATE=ON)
 --GO
-CREATE EVENT SESSION SQLMonitoring_PageSplits ON SERVER 
-ADD EVENT sqlserver.page_split
+CREATE EVENT SESSION Histogram_PageSplits ON SERVER 
+ADD EVENT sqlserver.page_split(
+ACTION(sqlserver.session_id,package0.collect_system_time))
 ADD TARGET package0.histogram(SET filtering_event_name=N'sqlserver.page_split',source=N'database_id',source_type=(0))
 WITH (MAX_MEMORY=4096 KB,EVENT_RETENTION_MODE=ALLOW_SINGLE_EVENT_LOSS,MAX_DISPATCH_LATENCY=30 SECONDS,MAX_EVENT_SIZE=0 KB,MEMORY_PARTITION_MODE=NONE,TRACK_CAUSALITY=OFF,STARTUP_STATE=ON)
 GO
@@ -98,14 +104,14 @@ GO
 
 CREATE EVENT SESSION [SQLMonitoring_CorruptionAndConsistency] ON SERVER 
 ADD EVENT sqlserver.constant_page_corruption_detected(
-    ACTION(package0.collect_current_thread_id)),
+    ACTION(package0.collect_current_thread_id,package0.collect_system_time,sqlos.task_time,sqlserver.client_app_name,sqlserver.client_hostname,sqlserver.plan_handle,sqlserver.query_hash,sqlserver.session_id,sqlserver.sql_text,sqlserver.username)),
 ADD EVENT sqlserver.database_suspect_data_page(SET collect_database_name=(1)
-    ACTION(package0.collect_current_thread_id)),
+    ACTION(package0.collect_current_thread_id,package0.collect_system_time,sqlos.task_time,sqlserver.client_app_name,sqlserver.client_hostname,sqlserver.plan_handle,sqlserver.query_hash,sqlserver.session_id,sqlserver.sql_text,sqlserver.username)),
 --ADD EVENT sqlserver.dbcc_checkdb_error_reported(
 --    ACTION(package0.collect_current_thread_id))
 --	,
 ADD EVENT sqlserver.error_reported(
-    ACTION(package0.collect_current_thread_id)
+    ACTION(package0.collect_current_thread_id,package0.collect_system_time,sqlos.task_time,sqlserver.client_app_name,sqlserver.client_hostname,sqlserver.plan_handle,sqlserver.query_hash,sqlserver.session_id,sqlserver.sql_text,sqlserver.username)
 	         WHERE (
                    ([severity] >= (17))
                    AND ([severity] <= (25))
@@ -155,18 +161,26 @@ GO
 GO
 
 CREATE EVENT SESSION SQLMonitoring_DatabaseLevelEvents ON SERVER 
-ADD EVENT sqlserver.database_attached,
-ADD EVENT sqlserver.database_created,
-ADD EVENT sqlserver.database_detached,
---ADD EVENT sqlserver.database_dropped,
-ADD EVENT sqlserver.database_file_size_change,
-ADD EVENT sqlserver.database_started,
-ADD EVENT sqlserver.database_stopped,
-ADD EVENT sqlserver.databases_data_file_size_changed,
-ADD EVENT sqlserver.databases_log_file_size_changed,
-ADD EVENT sqlserver.databases_log_growth
+ADD EVENT sqlserver.database_attached					(ACTION(package0.collect_system_time,sqlos.task_time,sqlserver.client_app_name,sqlserver.client_hostname,sqlserver.plan_handle,sqlserver.query_hash,sqlserver.session_id,sqlserver.sql_text,sqlserver.username))		,
+ADD EVENT sqlserver.database_created					(ACTION(package0.collect_system_time,sqlos.task_time,sqlserver.client_app_name,sqlserver.client_hostname,sqlserver.plan_handle,sqlserver.query_hash,sqlserver.session_id,sqlserver.sql_text,sqlserver.username))		,
+ADD EVENT sqlserver.database_detached					(ACTION(package0.collect_system_time,sqlos.task_time,sqlserver.client_app_name,sqlserver.client_hostname,sqlserver.plan_handle,sqlserver.query_hash,sqlserver.session_id,sqlserver.sql_text,sqlserver.username))		,
+--ADD EVENT sqlserver.database_dropped,					(ACTION(package0.collect_system_time,sqlos.task_time,sqlserver.client_app_name,sqlserver.client_hostname,sqlserver.plan_handle,sqlserver.query_hash,sqlserver.session_id,sqlserver.sql_text,sqlserver.username))
+ADD EVENT sqlserver.database_file_size_change			(ACTION(package0.collect_system_time,sqlos.task_time,sqlserver.client_app_name,sqlserver.client_hostname,sqlserver.plan_handle,sqlserver.query_hash,sqlserver.session_id,sqlserver.sql_text,sqlserver.username))		,
+ADD EVENT sqlserver.database_started					(ACTION(package0.collect_system_time,sqlos.task_time,sqlserver.client_app_name,sqlserver.client_hostname,sqlserver.plan_handle,sqlserver.query_hash,sqlserver.session_id,sqlserver.sql_text,sqlserver.username))		,
+ADD EVENT sqlserver.database_stopped					(ACTION(package0.collect_system_time,sqlos.task_time,sqlserver.client_app_name,sqlserver.client_hostname,sqlserver.plan_handle,sqlserver.query_hash,sqlserver.session_id,sqlserver.sql_text,sqlserver.username))		,
+ADD EVENT sqlserver.databases_data_file_size_changed	(ACTION(package0.collect_system_time,sqlos.task_time,sqlserver.client_app_name,sqlserver.client_hostname,sqlserver.plan_handle,sqlserver.query_hash,sqlserver.session_id,sqlserver.sql_text,sqlserver.username))		,
+ADD EVENT sqlserver.databases_log_file_size_changed		(ACTION(package0.collect_system_time,sqlos.task_time,sqlserver.client_app_name,sqlserver.client_hostname,sqlserver.plan_handle,sqlserver.query_hash,sqlserver.session_id,sqlserver.sql_text,sqlserver.username))		,
+ADD EVENT sqlserver.databases_log_growth				(ACTION(package0.collect_system_time,sqlos.task_time,sqlserver.client_app_name,sqlserver.client_hostname,sqlserver.plan_handle,sqlserver.query_hash,sqlserver.session_id,sqlserver.sql_text,sqlserver.username))
 ADD TARGET package0.ring_buffer(SET max_memory=(1024))
 WITH (MAX_MEMORY=4096 KB,EVENT_RETENTION_MODE=ALLOW_SINGLE_EVENT_LOSS,MAX_DISPATCH_LATENCY=30 SECONDS,MAX_EVENT_SIZE=0 KB,MEMORY_PARTITION_MODE=NONE,TRACK_CAUSALITY=OFF,STARTUP_STATE=ON)
+GO
+
+CREATE EVENT SESSION SQLMonitoring_PageSplits ON SERVER 
+ADD EVENT sqlserver.page_split(
+    ACTION(package0.collect_current_thread_id,sqlserver.client_app_name,sqlserver.client_hostname,sqlserver.session_id,sqlserver.sql_text)
+    WHERE ([package0].[equal_boolean]([sqlserver].[is_system],(0)) AND [sqlserver].[not_equal_i_sql_unicode_string]([sqlserver].[client_hostname],N'monitor-01') AND [sqlserver].[not_equal_i_sql_unicode_string]([sqlserver].[client_hostname],N'monitor-03')))
+ADD TARGET package0.ring_buffer(SET max_memory=(25600))
+WITH (MAX_MEMORY=4096 KB,EVENT_RETENTION_MODE=ALLOW_SINGLE_EVENT_LOSS,MAX_DISPATCH_LATENCY=30 SECONDS,MAX_EVENT_SIZE=0 KB,MEMORY_PARTITION_MODE=NONE,TRACK_CAUSALITY=ON,STARTUP_STATE=ON)
 GO
 
 
@@ -179,4 +193,4 @@ ALTER EVENT SESSION SQLMonitoring_Locking				     ON SERVER STATE  = START;
 
 ALTER EVENT SESSION SQLMonitoring_ObjectModifications        ON SERVER STATE  = START;
 ALTER EVENT SESSION SQLMonitoring_DatabaseLevelEvents        ON SERVER STATE  = START;
-
+ALTER EVENT SESSION Histogram_PageSplits					 ON SERVER STATE  = START;
