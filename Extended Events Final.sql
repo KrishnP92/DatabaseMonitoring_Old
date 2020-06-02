@@ -17,6 +17,16 @@ IF (SELECT TOP 1 1 FROM  sys.server_event_sessions WHERE name = 'SQLMonitoring_C
 IF (SELECT TOP 1 1 FROM  sys.server_event_sessions WHERE name = 'SQLMonitoring_ObjectModifications')		IS NOT NULL DROP EVENT SESSION SQLMonitoring_ObjectModifications      ON SERVER;
 IF (SELECT TOP 1 1 FROM  sys.server_event_sessions WHERE name = 'SQLMonitoring_DatabaseLevelEvents')		IS NOT NULL DROP EVENT SESSION SQLMonitoring_DatabaseLevelEvents      ON SERVER;
 IF (SELECT TOP 1 1 FROM  sys.server_event_sessions WHERE name = 'SQLMonitoring_Locking')					IS NOT NULL DROP EVENT SESSION SQLMonitoring_Locking                  ON SERVER;
+IF (SELECT TOP 1 1 FROM  sys.server_event_sessions WHERE name = 'SQLMonitoring_PerfmonCounters')			IS NOT NULL DROP EVENT SESSION SQLMonitoring_PerfmonCounters          ON SERVER;
+
+CREATE EVENT SESSION SQLMonitoring_PerfmonCounters ON SERVER 
+ADD EVENT sqlserver.perfobject_logicaldisk (ACTION(package0.collect_system_time)),
+ADD EVENT sqlserver.perfobject_process (ACTION(package0.collect_system_time)),
+ADD EVENT sqlserver.perfobject_processor(ACTION(package0.collect_system_time)),
+ADD EVENT sqlserver.perfobject_system(ACTION(package0.collect_system_time))
+ADD TARGET package0.ring_buffer(SET max_memory=(10240))
+WITH (STARTUP_STATE=ON)
+GO
 
 CREATE EVENT SESSION SQLMonitoring_CompletedQueries	      ON SERVER 
 ADD EVENT sqlos.wait_info(
@@ -104,14 +114,14 @@ GO
 
 CREATE EVENT SESSION [SQLMonitoring_CorruptionAndConsistency] ON SERVER 
 ADD EVENT sqlserver.constant_page_corruption_detected(
-    ACTION(package0.collect_current_thread_id,package0.collect_system_time,sqlos.task_time,sqlserver.client_app_name,sqlserver.client_hostname,sqlserver.plan_handle,sqlserver.query_hash,sqlserver.session_id,sqlserver.sql_text,sqlserver.username)),
+    ACTION(package0.collect_system_time,sqlos.task_time,sqlserver.client_app_name,sqlserver.client_hostname,sqlserver.plan_handle,sqlserver.query_hash,sqlserver.session_id,sqlserver.sql_text,sqlserver.username)),
 ADD EVENT sqlserver.database_suspect_data_page(SET collect_database_name=(1)
-    ACTION(package0.collect_current_thread_id,package0.collect_system_time,sqlos.task_time,sqlserver.client_app_name,sqlserver.client_hostname,sqlserver.plan_handle,sqlserver.query_hash,sqlserver.session_id,sqlserver.sql_text,sqlserver.username)),
+    ACTION(package0.collect_system_time,sqlos.task_time,sqlserver.client_app_name,sqlserver.client_hostname,sqlserver.plan_handle,sqlserver.query_hash,sqlserver.session_id,sqlserver.sql_text,sqlserver.username)),
 --ADD EVENT sqlserver.dbcc_checkdb_error_reported(
 --    ACTION(package0.collect_current_thread_id))
 --	,
 ADD EVENT sqlserver.error_reported(
-    ACTION(package0.collect_current_thread_id,package0.collect_system_time,sqlos.task_time,sqlserver.client_app_name,sqlserver.client_hostname,sqlserver.plan_handle,sqlserver.query_hash,sqlserver.session_id,sqlserver.sql_text,sqlserver.username)
+    ACTION(package0.collect_system_time,sqlos.task_time,sqlserver.client_app_name,sqlserver.client_hostname,sqlserver.plan_handle,sqlserver.query_hash,sqlserver.session_id,sqlserver.sql_text,sqlserver.username)
 	         WHERE (
                    ([severity] >= (17))
                    AND ([severity] <= (25))
@@ -177,7 +187,7 @@ GO
 
 CREATE EVENT SESSION SQLMonitoring_PageSplits ON SERVER 
 ADD EVENT sqlserver.page_split(
-    ACTION(package0.collect_current_thread_id,sqlserver.client_app_name,sqlserver.client_hostname,sqlserver.session_id,sqlserver.sql_text)
+    ACTION(package0.collect_system_time,sqlserver.client_app_name,sqlserver.client_hostname,sqlserver.session_id,sqlserver.sql_text)
     WHERE ([package0].[equal_boolean]([sqlserver].[is_system],(0)) AND [sqlserver].[not_equal_i_sql_unicode_string]([sqlserver].[client_hostname],N'monitor-01') AND [sqlserver].[not_equal_i_sql_unicode_string]([sqlserver].[client_hostname],N'monitor-03')))
 ADD TARGET package0.ring_buffer(SET max_memory=(25600))
 WITH (MAX_MEMORY=4096 KB,EVENT_RETENTION_MODE=ALLOW_SINGLE_EVENT_LOSS,MAX_DISPATCH_LATENCY=30 SECONDS,MAX_EVENT_SIZE=0 KB,MEMORY_PARTITION_MODE=NONE,TRACK_CAUSALITY=ON,STARTUP_STATE=ON)
@@ -194,3 +204,4 @@ ALTER EVENT SESSION SQLMonitoring_Locking				     ON SERVER STATE  = START;
 ALTER EVENT SESSION SQLMonitoring_ObjectModifications        ON SERVER STATE  = START;
 ALTER EVENT SESSION SQLMonitoring_DatabaseLevelEvents        ON SERVER STATE  = START;
 ALTER EVENT SESSION Histogram_PageSplits					 ON SERVER STATE  = START;
+ALTER EVENT SESSION SQLMonitoring_PerfmonCounters			 ON SERVER STATE  = START;

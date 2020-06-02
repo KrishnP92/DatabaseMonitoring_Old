@@ -1,4 +1,4 @@
-/*
+--/*
 SET NOCOUNT ON
 IF OBJECT_ID('TempDB..#TempResults','U') IS NOT NULL DROP TABLE #TempResults;
 CREATE TABLE #TempResults
@@ -301,7 +301,7 @@ WHILE @OuterIterations>= @OuterCounter
 		--SELECT @SQLToRun = N'';
 		SET @OuterCounter  += 1;
 	END
-*/
+--*/
 SET NOCOUNT ON;
 GO
 IF OBJECT_ID('TempDB..##ProcDefinitions','U')	IS NOT NULL DROP TABLE ##ProcDefinitions;
