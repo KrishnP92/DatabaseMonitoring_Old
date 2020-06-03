@@ -1,4 +1,3 @@
---/*
 SET NOCOUNT ON
 IF OBJECT_ID('TempDB..#TempResults','U') IS NOT NULL DROP TABLE #TempResults;
 CREATE TABLE #TempResults
@@ -6,8 +5,6 @@ CREATE TABLE #TempResults
 		 TempResultsID		INT IDENTITY(1,1)	 NOT NULL 
 		,SQLText			VARCHAR(MAX)					NULL
 		,EventName			NVARCHAR(255)		 NULL
-		--,FileNme			NVARCHAR(255)		 NOT NULL
-		--,ObjectNme			NVARCHAR(255)		 NOT NULL
 	)
 DECLARE @FileName		NVARCHAR(255)
 DECLARE @object_name	NVARCHAR(255)
@@ -194,6 +191,8 @@ SELECT
 		SELECT
 		OuterRowNum
 			,''''?'''' EventName
+			,SQLInstance
+			,EventCheckSum
 ,'' + @SQLCols + ''
 	,[attach_activity_id_xfer]
 	,[attach_activity_id]	
@@ -202,6 +201,8 @@ SELECT
 			(
 				SELECT
 					EventName
+				   ,SQLInstance
+				   ,EventCheckSum
 				   ,VarcharValue
 				   ,OuterRowNum
 				FROM
@@ -221,20 +222,71 @@ SELECT
 	 [collect_system_time]
 	,DATEADD(HOUR,DATEDIFF(HOUR,GETUTCDATE(),GETDATE()),[collect_system_time]) AS CollectDateTime
 	,EventName 
+	,SQLInstance
+	,EventCheckSum
 ''+ @OutputSQLCols +''
 	,[attach_activity_id_xfer]
-	,[attach_activity_id]	
+	,[attach_activity_id]
+	
 FROM
-	 OutputCte	
+	 OutputCte;
+BEGIN TRAN
+	UPDATE LP
+	SET
+		 LP.LastProcessedDateTime = SYSDATETIME()	
+		,LP.EventSessionChecksum  = ED.EventSessionChecksum	
+		,LP.EventCheckSum		  = ED.EventCheckSum	
+	FROM
+		ExtendedEvents.LastProcessed LP	
+	JOIN
+		#EventData ED
+	ON
+		LP.SQLInstance = ED.SQLInstance
+	AND
+		LP.EventSession	= ED.EventSession
+	AND
+		LP.EventSessionType	= ED.EventSessionType;
+
+	INSERT INTO ExtendedEvents.LastProcessed
+		(
+			 SQLInstance            
+			,EventSession	
+			,EventName		
+			,LastProcessedDateTime  
+			,EventSessionChecksum  
+			,EventCheckSum	
+			,EventSessionType	  
+		)
+	SELECT
+		 ED.SQLInstance            
+		,ED.EventSession			
+		,ED.EventName
+		,SYSDATETIME() LastProcessedDateTime  
+		,ED.EventSessionChecksum  
+		,ED.EventCheckSum		  
+		,ED.EventSessionType
+	FROM
+		#EventData ED
+	LEFT JOIN
+		ExtendedEvents.LastProcessed LP	
+	ON
+		ED.SQLInstance			 = LP.SQLInstance
+	AND
+		ED.EventSession			 = LP.EventSession
+	WHERE
+		LP.LastProcessedID IS NULL
+
+	DELETE EQ
+	FROM
+		ExtendedEvents.AsyncEventQueue EQ
+	JOIN
+		#EventData ED
+	ON
+		EQ.AsyncEventQueueID = ED.AsyncEventQueueID;
+COMMIT
 ''
---PRINT @SQL	
---EXEC sys.sp_executesql 
 SELECT @SQL 
---SELECT CAST(@SQL		 AS XML)
---SELECT CAST(@OutputSQLCols AS XML)
 '
---SE@OverallSQL		 
---SELECT CAST(@OverallSQL		 AS XML)
 
 
 SELECT @OuterIterations = COUNT(*) FROM sys.dm_xe_sessions s JOIN sys.dm_xe_session_events e ON s.address = e.event_session_address WHERE s.name LIKE 'SQLMonitoring_%';
@@ -262,14 +314,11 @@ WHILE @OuterIterations>= @OuterCounter
 			Cte
 		WHERE
 			Cte.RowNum = @OuterCounter;
-		--SELECT @SQLToRun,@object_name,@FileName
 		INSERT INTO #TempResults
 			(
 			SQLText
 			)
-		--SELECT CAST(@SQLToRun AS XML)
 		EXEC sys.sp_executesql @SQLToRun
-		--SELECT CAST(@SQLToRun AS XML)
 		;WITH Cte AS
 			(
 				SELECT
@@ -310,8 +359,8 @@ DECLARE @SQL			NVARCHAR(MAX) = N'';
 DECLARE @CreateSQL		NVARCHAR(MAX) = N'';
 DECLARE @OuterSQL		NVARCHAR(MAX) = N'';
 DECLARE @SQLCols		NVARCHAR(MAX) = N'';
-DECLARE @EventName		NVARCHAR(255) = N''; --= N'plan_affecting_convert';
-DECLARE @SessionName	NVARCHAR(255) = N''; --= N'SQLMonitoring_CompletedQueries';
+DECLARE @EventName		NVARCHAR(255) = N'';
+DECLARE @SessionName	NVARCHAR(255) = N'';
 DECLARE @Counter		INT	= 1;
 DECLARE @Iterations		INT	= 1;
 SELECT  @Iterations		 = COUNT(*) FROM  sys.dm_xe_sessions s JOIN sys.dm_xe_session_events e ON s.address = e.event_session_address WHERE s.name LIKE 'SQLMonitoring_%';
@@ -378,7 +427,6 @@ IF OBJECT_ID('TempDB..##PivotedOutput','U')		IS NOT NULL DROP TABLE ##PivotedOut
 				  --  ,'histogram'
 				);
 
-			--EXEC sys.sp_executesql @CreateSQL;
 			SELECT @OuterSQL = N'
 			SELECT TOP 1
 				 ED.EventData.query(''/RingBufferTarget/event[@name="' + @EventName + '"]/action'')  ActionEventData
@@ -460,11 +508,8 @@ IF OBJECT_ID('TempDB..##PivotedOutput','U')		IS NOT NULL DROP TABLE ##PivotedOut
 						)Dt
 					GROUP BY
 						 + CHAR(10) + '			,' + QUOTENAME(EventName,'[')
-						--,MAX(SortColumn)
 					ORDER BY	
 						MAX(SortColumn);
-					--SELECT
-					--	@SQLCols = RIGHT(@SQLCols,LEN(@SQLCols)-1);
 					SELECT
 						@SQL = N'
 					SELECT
@@ -489,37 +534,145 @@ IF OBJECT_ID('TempDB..##PivotedOutput','U')		IS NOT NULL DROP TABLE ##PivotedOut
 							EventName IN (' + RIGHT(@SQLCols,LEN(@SQLCols)-5) + ')
 						)PIVOTTABLE';
 					PRINT @SQL;
-					--SELECT @SQL = REPLACE(REPLACE(@SQL,'(,','('),'(	,','(');
 					BEGIN TRY
 						EXEC sys.sp_executesql @SQL;
 					END TRY
 					BEGIN CATCH
 						SELECT ERROR_MESSAGE(),CAST(@SQL AS XML)
 					END CATCH
-				--	SELECT CAST(@SQL AS XML)
 				END
 
 			SELECT @CreateSQL = N'
 			--CREATE PROC ExtendedEvents.usp_' + @EventName + ' AS
 			SET NOCOUNT ON;
-			;WITH SourceCte AS
+			IF OBJECT_ID(''TempDB..#EventData'',''U'')		IS NOT NULL DROP TABLE #EventData;
+			IF OBJECT_ID(''TempDB..#AsyncEventData'',''U'') IS NOT NULL DROP TABLE #AsyncEventData;
+			CREATE TABLE #EventData
 				(
-					SELECT TOP 1
-						 ED.EventData.query(''/RingBufferTarget/event[@name="' + @EventName + '"]/action'')  ActionEventData
-						,ED.EventData.query(''/RingBufferTarget/event[@name="' + @EventName + '"]/data'')  DataEventData
+					EventDataId           INT IDENTITY(1,1)   NOT NULL	     
+				   ,AsyncEventQueueID		INT					NOT NULL
+				   ,SQLInstance				VARCHAR(255)		NOT NULL
+				   ,CollectionDateTime		DATETIME2			NOT NULL
+				   ,CollectionTimeStamp		DATETIME2			NOT NULL
+				   ,EventSession			VARCHAR(255)		NOT NULL
+				   ,EventName				VARCHAR(255)		NOT NULL
+				   ,EventSessionType		VARCHAR(25)		   NOT NULL
+				   ,EventXml				XML					NOT NULL
+				   ,EventSessionChecksum	BIGINT				NOT NULL
+				   ,EventCheckSum			BIGINT				NOT NULL
+				   ,isInprogress			BIT					NOT NULL
+				);
+			CREATE TABLE #AsyncEventData
+				(
+					 AsyncEventDataID		INT IDENTITY(1,1)	NOT NULL
+					,EventCheckSum			BIGINT				NOT NULL
+					,SQLInstance			VARCHAR(255)		NOT NULL
+					,ActionEventData		XML					NOT NULL
+					,DataEventData			XML					NOT NULL
+				);
+			BEGIN TRAN
+				INSERT INTO #EventData
+					(
+						 AsyncEventQueueID
+						,SQLInstance
+						,CollectionDateTime
+						,CollectionTimeStamp
+						,EventSession
+						,EventName
+						,EventSessionType
+						,EventXml
+						,EventSessionChecksum
+						,EventCheckSum
+						,isInprogress
+					)
+				SELECT	TOP 2
+					 AsyncEventQueueID
+					,SQLInstance
+					,CollectionDateTime
+					,CollectionTimeStamp
+					,EventSession
+					,EventName
+					,EventSessionType
+					,EventXml
+					,EventSessionChecksum
+					,EventCheckSum
+					,isInprogress          				
+				FROM
+					ExtendedEvents.AsyncEventQueue ED
+				WHERE
+					ED.isInprogress = 0
+				AND
+					ED.EventSession = ''' + @SessionName + '''
+					AND
+						ED.EventName =  ''' + @EventName + '''
+				ORDER BY
+					AsyncEventQueueID;
+
+				UPDATE EQ
+				SET isInprogress = 1
+				FROM
+					ExtendedEvents.AsyncEventQueue EQ
+				JOIN
+					#EventData ED
+				ON
+					EQ.AsyncEventQueueID = ED.AsyncEventQueueID;
+			COMMIT
+			;WITH BaseCte AS
+				(
+					SELECT
+						 ED.EventCheckSum
+						,ED.SQLInstance
+						,ROW_NUMBER()OVER(ORDER BY (SELECT NULL)) RowNum	
+						,ED.EventXML.query(''/event[@name="' + @EventName + '"]/action'')  ActionEventData
+						,ED.EventXML.query(''/event[@name="' + @EventName + '"]/data'')  DataEventData
 					FROM 
-						##EventSessions ED
+						#EventData ED
 					CROSS APPLY 
-						EventData.nodes(''//RingBufferTarget/event[@name="' + @EventName + '"]'') AS xed(event_data)
+						EventXML.nodes(''/event[@name="' + @EventName + '"]'') AS xed(event_data)
+					WHERE
+						ED.EventSession =  ''' + @SessionName + '''
+					AND
+						ED.EventName =  ''' + @EventName + '''
+					AND
+						ED.isInprogress = 0
 				)
-			, DataCte AS
+			INSERT INTO #AsyncEventData
+				(
+					 EventCheckSum
+					,SQLInstance
+					,ActionEventData		
+					,DataEventData								
+				)
+			SELECT
+				BaseCte.EventCheckSum
+			   ,BaseCte.SQLInstance
+			   ,BaseCte.ActionEventData
+			   ,BaseCte.DataEventData
+			FROM
+				BaseCte
+			JOIN
+				(
+					SELECT
+						 BaseCte.EventCheckSum
+						,MAX(BaseCte.RowNum) RowNum
+					FROM
+						BaseCte
+					GROUP BY
+						BaseCte.EventCheckSum
+				)Dt
+			ON
+				BaseCte.RowNum = Dt.RowNum'
+		SELECT @CreateSQL += N'
+			;WITH DataCte AS
 				(
 					SELECT 
 						 ded.event_data.value(''@name'', ''VARCHAR(MAX)'') EventName
 						,ded.event_data.value(''value[1]'', ''VARCHAR(MAX)'')   VarcharValue
-						,ROW_NUMBER() OVER(ORDER BY ded.event_data) InnerRowNum
+						,ED.SQLInstance
+						,ED.EventCheckSum
+						,ROW_NUMBER() OVER(ORDER BY ED.SQLInstance,ED.EventCheckSum,ded.event_data) InnerRowNum
 					FROM
-						SourceCte ED
+						#AsyncEventData ED
 					CROSS APPLY 
 						DataEventData.nodes(''//data'') AS ded(event_data)
 				)
@@ -528,9 +681,11 @@ IF OBJECT_ID('TempDB..##PivotedOutput','U')		IS NOT NULL DROP TABLE ##PivotedOut
 					SELECT 
 						 ded.event_data.value(''@name'', ''VARCHAR(MAX)'') EventName
 						,ded.event_data.value(''value[1]'', ''VARCHAR(MAX)'')   VarcharValue
-						,ROW_NUMBER() OVER(ORDER BY ded.event_data) InnerRowNum
+						,ED.SQLInstance
+						,ED.EventCheckSum
+						,ROW_NUMBER() OVER(ORDER BY ED.SQLInstance,ED.EventCheckSum,ded.event_data) InnerRowNum
 					FROM
-						SourceCte ED
+						#AsyncEventData ED
 					CROSS APPLY 
 						ActionEventData.nodes(''//action'') AS ded(event_data)
 				)
@@ -540,7 +695,9 @@ IF OBJECT_ID('TempDB..##PivotedOutput','U')		IS NOT NULL DROP TABLE ##PivotedOut
 						 DataCte.EventName
 						,DataCte.VarcharValue
 						,DataCte.InnerRowNum 
-						,ROW_NUMBER()OVER(PARTITION BY DataCte.EventName ORDER BY DataCte.InnerRowNum) OuterRowNum
+						,DataCte.SQLInstance
+						,DataCte.EventCheckSum
+						,ROW_NUMBER()OVER(PARTITION BY DataCte.SQLInstance,DataCte.EventCheckSum, DataCte.EventName ORDER BY DataCte.InnerRowNum) OuterRowNum
 						,''Data'' DataSource
 					FROM 
 						DataCte
@@ -549,7 +706,9 @@ IF OBJECT_ID('TempDB..##PivotedOutput','U')		IS NOT NULL DROP TABLE ##PivotedOut
 						ActionCte.EventName
 					   ,ActionCte.VarcharValue
 					   ,ActionCte.InnerRowNum 
-						,ROW_NUMBER()OVER(PARTITION BY ActionCte.EventName ORDER BY ActionCte.InnerRowNum) OuterRowNum
+					   ,ActionCte.SQLInstance
+					   ,ActionCte.EventCheckSum
+						,ROW_NUMBER()OVER(PARTITION BY ActionCte.SQLInstance, ActionCte.EventCheckSum, ActionCte.EventName ORDER BY ActionCte.InnerRowNum) OuterRowNum
 						,''Action'' DataSource
 					FROM 
 						ActionCte
@@ -560,7 +719,9 @@ IF OBJECT_ID('TempDB..##PivotedOutput','U')		IS NOT NULL DROP TABLE ##PivotedOut
 						FinalCte.EventName
 					   ,FinalCte.VarcharValue
 					   ,FinalCte.OuterRowNum
-					   ,ROW_NUMBER()OVER(PARTITION BY  FinalCte.OuterRowNum ORDER BY FinalCte.DataSource, FinalCte.InnerRowNum)FinalRowNum
+					   ,FinalCte.SQLInstance
+					   ,FinalCte.EventCheckSum
+					   ,ROW_NUMBER()OVER(PARTITION BY  FinalCte.SQLInstance, FinalCte.EventCheckSum, FinalCte.OuterRowNum ORDER BY FinalCte.DataSource, FinalCte.InnerRowNum)FinalRowNum
 					FROM  
 						FinalCte
 				)
@@ -576,6 +737,3 @@ SELECT
 FROM
 	##ProcDefinitions
 SELECT CAST(@FinalSQL AS XML)
-	--SELECT * FROM ##PivotedOutput
-	--EXEC sys.sp_executeSQL @CreateSQL
-
