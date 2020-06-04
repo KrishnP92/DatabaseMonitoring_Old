@@ -51,5 +51,6 @@ foreach ($Inst in $SQLList)
     {
         Invoke-DbaQuery -SqlInstance $Inst.SQLInstance -Query $SQLQuery 
     }
+    get-date    
 $Output | Write-DbaDataTable -SqlInstance $TargetServerInstance -Database $TargetDatabase -Schema $TargetSchema -Table  $TargetTable -FireTriggers
 get-date

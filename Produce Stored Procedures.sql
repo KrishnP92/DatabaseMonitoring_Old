@@ -282,7 +282,10 @@ BEGIN TRAN
 	JOIN
 		#EventData ED
 	ON
-		EQ.AsyncEventQueueID = ED.AsyncEventQueueID;
+		EQ.AsyncEventQueueID = ED.AsyncEventQueueID
+	AND
+		isInprogress = 1;
+
 COMMIT
 ''
 SELECT @SQL 
